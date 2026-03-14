@@ -48,20 +48,10 @@ python3 ui.py
 
 ### Play against the AI
 
-Players are numbered from 0. Use `--ai` to specify which players are controlled by the AI.
+The UI supports 2 players (5 factories). Use `--ai 1` to make player 1 an AI opponent:
 
 ```bash
-# 2-player game: you are player 0, AI is player 1
 python3 ui.py --ai 1
-
-# 2-player game: both players are AI (watch mode)
-python3 ui.py --ai 0 1
-
-# 3-player game: you vs two AI opponents
-python3 ui.py --players 3 --ai 1 2
-
-# 4-player game: all AI
-python3 ui.py --players 4 --ai 0 1 2 3
 ```
 
 ### Run tests
@@ -150,20 +140,10 @@ python3 ui.py
 
 ### 与 AI 对战
 
-玩家编号从 0 开始，用 `--ai` 指定由 AI 控制的玩家。
+UI 目前支持双人对战（5 个工厂）。用 `--ai 1` 让玩家 1 由 AI 控制：
 
 ```bash
-# 双人对战：你是玩家 0，AI 是玩家 1
 python3 ui.py --ai 1
-
-# 双人对战：双方均为 AI（观战模式）
-python3 ui.py --ai 0 1
-
-# 三人对战：你对阵两个 AI
-python3 ui.py --players 3 --ai 1 2
-
-# 四人对战：全部 AI
-python3 ui.py --players 4 --ai 0 1 2 3
 ```
 
 ### 运行单元测试
