@@ -387,6 +387,34 @@ class MCTSAgent:
         """Drop-in for RandomAI.choose_move — called from a background thread."""
         result_queue.put(self.get_best_move(state))
 
+    async def get_best_move_async(self,
+                                   state:      AzulState,
+                                   timeout_ms: Optional[int] = None) -> Optional[Move]:
+        """
+        Async version of get_best_move for use with asyncio (pygbag / browser).
+        Yields control every 10 MCTS iterations so the event loop stays responsive.
+        """
+        import asyncio
+        ms    = timeout_ms if timeout_ms is not None else self.timeout_ms
+        moves = state.get_legal_moves()
+        if not moves:
+            return None
+        if len(moves) == 1:
+            return moves[0]
+
+        root     = _Node(_fast_clone(state), parent=None, move=None)
+        deadline = time.monotonic() + ms / 1000.0
+
+        while time.monotonic() < deadline:
+            for _ in range(10):
+                leaf = self._select(root)
+                if not leaf.is_terminal:
+                    leaf = self._expand(leaf)
+                self._backprop(leaf, self._simulate(leaf))
+            await asyncio.sleep(0)  # 让出控制权，保持 UI 响应
+
+        return root.best_child_robust().move if root.children else random.choice(moves)
+
     # ── MCTS phases ───────────────────────────────────────────────────────────
 
     def _select(self, node: _Node) -> _Node:

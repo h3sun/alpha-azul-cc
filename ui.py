@@ -8,13 +8,14 @@
 import os
 import sys
 import math
-import threading
+import asyncio
 import queue
 import time
 import pygame
 
-# ── Retina/HiDPI 支持（必须在 pygame.init 之前设置）────────
-os.environ["SDL_VIDEO_HIGHDPI"] = "1"
+# ── Retina/HiDPI 支持（桌面端，浏览器环境跳过）────────
+if sys.platform != "emscripten":
+    os.environ["SDL_VIDEO_HIGHDPI"] = "1"
 sys.path.insert(0, os.path.dirname(__file__))
 
 from engine import (AzulState, Move, CENTER, FLOOR,
@@ -108,29 +109,24 @@ class TileAnim:
 class AnimManager:
     def __init__(self):
         self._anims: list[TileAnim] = []
-        self.lock = threading.Lock()
 
     def add(self, color, start, end, duration=0.35):
-        with self.lock:
-            self._anims.append(TileAnim(color, start, end, duration))
+        self._anims.append(TileAnim(color, start, end, duration))
 
     def update(self, dt: float):
-        with self.lock:
-            for a in self._anims:
-                a.update(dt)
-            self._anims = [a for a in self._anims if not a.done]
+        for a in self._anims:
+            a.update(dt)
+        self._anims = [a for a in self._anims if not a.done]
 
     def draw(self, surf):
-        with self.lock:
-            for a in self._anims:
+        for a in self._anims:
                 pos = a.pos
                 draw_tile(surf, a.color, int(pos.x), int(pos.y),
                           TILE, alpha=200)
 
     @property
     def busy(self) -> bool:
-        with self.lock:
-            return len(self._anims) > 0
+        return len(self._anims) > 0
 
 
 # ──────────────────────────────────────────────────────────────
@@ -276,12 +272,12 @@ class Renderer:
         pygame.draw.line(self.surf, C.BORDER, (0, INFO_H), (LW, INFO_H), 1)
 
         # 标题
-        title = self.fonts['title'].render("🀄 花砖物语 Azul", True, C.TEXT_MAIN)
+        title = self.fonts['title'].render("Azul", True, C.TEXT_MAIN)
         self.surf.blit(title, (16, 10))
 
         # 当前玩家
         cp = state.current_player
-        txt = f"当前行动: 玩家 {cp + 1}"
+        txt = f"Turn: Player {cp + 1}"
         color = C.HIGHLIGHT if not state.game_over else C.TEXT_DIM
         t = self.fonts['normal'].render(txt, True, color)
         self.surf.blit(t, (LW // 2 - t.get_width() // 2, 14))
@@ -290,7 +286,7 @@ class Renderer:
         for pid in range(state.num_players):
             score = state.boards[pid].score
             marker = "★ " if state.boards[pid].has_first_marker else ""
-            txt = f"P{pid+1}: {marker}{score}分"
+            txt = f"P{pid+1}: {marker}{score} pts"
             col = C.HIGHLIGHT if pid == cp else C.TEXT_DIM
             t   = self.fonts['normal'].render(txt, True, col)
             x   = LW - 280 + pid * 140
@@ -316,7 +312,7 @@ class Renderer:
             rounded_rect(self.surf, C.PANEL, frect, radius=10,
                          border=1, border_color=C.BORDER)
 
-            label = self.fonts['small'].render(f"工厂 {fi+1}", True, C.TEXT_DIM)
+            label = self.fonts['small'].render(f"Factory {fi+1}", True, C.TEXT_DIM)
             self.surf.blit(label, (fx - 2, fy - 24))
 
             # 绘制4格，每格最多1种颜色
@@ -344,7 +340,7 @@ class Renderer:
     # ── 中心区 ────────────────────────────────────────────────
     def _draw_center(self, state: AzulState, ui_state: 'UIState'):
         cy_start = FACTORY_Y + 2 * (FACTORY_H + 10) + 10
-        cx_label = self.fonts['small'].render("中心区", True, C.TEXT_DIM)
+        cx_label = self.fonts['small'].render("Center", True, C.TEXT_DIM)
         self.surf.blit(cx_label, (CENTER_X, cy_start - 22))
 
         # 背景
@@ -405,7 +401,7 @@ class Renderer:
         # 玩家标签
         marker_str = " ★" if board.has_first_marker else ""
         label = self.fonts['bold'].render(
-            f"玩家 {pid+1}{marker_str}    {board.score} 分", True,
+            f"Player {pid+1}{marker_str}    {board.score} pts", True,
             C.HIGHLIGHT if pid == state.current_player else C.TEXT_MAIN)
         self.surf.blit(label, (bx + PL_PAD, by + 8))
 
@@ -479,7 +475,7 @@ class Renderer:
 
         # 地板行
         floor_y = content_y + 5 * STEP + 10
-        fl_label = self.fonts['small'].render("地板:", True, C.TEXT_DIM)
+        fl_label = self.fonts['small'].render("Floor:", True, C.TEXT_DIM)
         self.surf.blit(fl_label, (bx + PL_PAD, floor_y + 4))
 
         fl_bg = pygame.Rect(bx + PL_PAD + 46, floor_y - 2,
@@ -510,7 +506,7 @@ class Renderer:
 
         # 地板总扣分
         pen = board.floor_penalty()
-        pen_t = self.fonts['small'].render(f"{pen:+d}分", True,
+        pen_t = self.fonts['small'].render(f"{pen:+d}", True,
                                            (220, 80, 80) if pen < 0 else C.TEXT_DIM)
         self.surf.blit(pen_t, (bx + PL_PAD + 50 + 7 * STEP + 6, floor_y + 4))
 
@@ -521,12 +517,12 @@ class Renderer:
     # ── 底部操作提示 ──────────────────────────────────────────
     def _draw_instructions(self, ui_state: 'UIState'):
         if ui_state.selected_source is None:
-            msg = "点击工厂或中心区的瓷砖来选取"
+            msg = "Click a factory or center tile to select"
         else:
             src, col = ui_state.selected_source
-            src_str  = "中心区" if src == CENTER else f"工厂{src+1}"
+            src_str  = "Center" if src == CENTER else f"Factory {src+1}"
             color_str = COLORS[col]
-            msg = f"已选: {src_str} → {color_str}砖  |  点击样式行放置，或点击地板区直接丢弃"
+            msg = f"Selected: {src_str} -> {color_str}  |  Click a row to place, or floor to discard"
         t = self.fonts['small'].render(msg, True, C.TEXT_DIM)
         self.surf.blit(t, (LW // 2 - t.get_width() // 2, LH - 22))
 
@@ -551,11 +547,11 @@ class Renderer:
 
         # 标题
         if is_floor:
-            title = f"P{pid+1} 地板扣分"
+            title = f"P{pid+1} Floor Penalty"
         else:
             row, col = step['row'], step['col']
             color_name = COLORS[step['color']]
-            title = f"P{pid+1} 第{row+1}行 {color_name}砖"
+            title = f"P{pid+1} Row {row+1}: {color_name}"
         t = self.fonts['small'].render(title, True, C.TEXT_DIM)
         self.surf.blit(t, (px + 10, py + 10))
 
@@ -569,7 +565,7 @@ class Renderer:
         sb = step['score_before']
         sa = step['score_after']
         change = self.fonts['small'].render(
-            f"{sb} → {sa} 分", True, C.TEXT_MAIN)
+            f"{sb} -> {sa}", True, C.TEXT_MAIN)
         self.surf.blit(change, (px + pw // 2 - change.get_width() // 2, py + 90))
 
         # 得分说明
@@ -581,18 +577,18 @@ class Renderer:
             y_off = py + 118
             if h_len > 1:
                 hl = self.fonts['tiny'].render(
-                    f"水平连接 {h_len} 块  +{h_len}", True, C.H_GLOW)
+                    f"Horizontal {h_len}  +{h_len}", True, C.H_GLOW)
                 self.surf.blit(hl, (px + 10, y_off)); y_off += 22
             if v_len > 1:
                 vl = self.fonts['tiny'].render(
-                    f"垂直连接 {v_len} 块  +{v_len}", True, C.V_GLOW)
+                    f"Vertical {v_len}  +{v_len}", True, C.V_GLOW)
                 self.surf.blit(vl, (px + 10, y_off)); y_off += 22
             if h_len == 1 and v_len == 1:
-                iso = self.fonts['tiny'].render("孤立砖  +1", True, C.TEXT_DIM)
+                iso = self.fonts['tiny'].render("Isolated  +1", True, C.TEXT_DIM)
                 self.surf.blit(iso, (px + 10, y_off))
         else:
             fl_text = self.fonts['tiny'].render(
-                f"地板 {len(state.boards[pid].floor)} 块  {pts:+d}分",
+                f"Floor {len(state.boards[pid].floor)} tiles  {pts:+d}",
                 True, C.SCORE_NEG)
             self.surf.blit(fl_text, (px + 10, py + 118))
 
@@ -600,11 +596,11 @@ class Renderer:
         total = len(scoring.steps)
         cur   = scoring.current_idx + 1
         prog  = self.fonts['tiny'].render(
-            f"步骤 {cur}/{total}", True, C.TEXT_DIM)
+            f"Step {cur}/{total}", True, C.TEXT_DIM)
         self.surf.blit(prog, (px + pw - prog.get_width() - 10, py + ph - 22))
 
         # 按空格跳过提示
-        skip = self.fonts['tiny'].render("空格 跳过动画", True, C.TEXT_DIM)
+        skip = self.fonts['tiny'].render("Space: skip", True, C.TEXT_DIM)
         self.surf.blit(skip, (px + 10, py + ph - 22))
 
         # ── 在墙面上高亮连续砖 ───────────────────────────
@@ -683,10 +679,10 @@ class Renderer:
         self.surf.blit(panel, (px, py))
 
         # ── 标题 ──────────────────────────────────────────
-        t = self.fonts['title'].render("游戏结束！", True, C.TEXT_MAIN)
+        t = self.fonts['title'].render("Game Over!", True, C.TEXT_MAIN)
         self.surf.blit(t, (LW // 2 - t.get_width() // 2, py + 10))
 
-        win_txt = f"🏆  玩家 {winner + 1} 获胜！"
+        win_txt = f"Player {winner + 1} Wins!"
         t = self.fonts['title'].render(win_txt, True, C.HIGHLIGHT)
         self.surf.blit(t, (LW // 2 - t.get_width() // 2, py + 42))
 
@@ -707,26 +703,26 @@ class Renderer:
 
             # 玩家名 + 总分
             name = self.fonts['bold'].render(
-                f"玩家 {pid + 1}{'  ★' if is_win else ''}", True, row_col)
+                f"Player {pid + 1}{'  *' if is_win else ''}", True, row_col)
             self.surf.blit(name, (px + 18, ry + 10))
 
             total_t = self.fonts['title'].render(
-                f"{board.score} 分", True, row_col)
+                f"{board.score} pts", True, row_col)
             self.surf.blit(total_t, (px + PW - total_t.get_width() - 18, ry + 8))
 
             # ── 明细：游戏得分 + 三项加分 ─────────────────
             segments = [
-                (f"游戏 {base_score}", C.TEXT_DIM),
+                (f"Game {base_score}", C.TEXT_DIM),
             ]
             if bns['row_pts']:
                 segments.append(
-                    (f"横行×{bns['rows']} +{bns['row_pts']}", C.H_GLOW))
+                    (f"Rows x{bns['rows']} +{bns['row_pts']}", C.H_GLOW))
             if bns['col_pts']:
                 segments.append(
-                    (f"竖列×{bns['cols']} +{bns['col_pts']}", C.V_GLOW))
+                    (f"Cols x{bns['cols']} +{bns['col_pts']}", C.V_GLOW))
             if bns['color_pts']:
                 segments.append(
-                    (f"颜色×{bns['colors']} +{bns['color_pts']}", C.SCORE_POP))
+                    (f"Colors x{bns['colors']} +{bns['color_pts']}", C.SCORE_POP))
 
             dx = px + 18
             for seg_txt, seg_col in segments:
@@ -740,7 +736,7 @@ class Renderer:
 
         # ── 底部提示 ──────────────────────────────────────
         hint = self.fonts['small'].render(
-            "按 R 重新开始  /  按 Q 退出", True, C.TEXT_DIM)
+            "R: Restart  /  Q: Quit", True, C.TEXT_DIM)
         self.surf.blit(hint, (LW // 2 - hint.get_width() // 2,
                                py + PH - FTR_H + 10))
 
@@ -884,10 +880,13 @@ class RandomAI:
 class AzulGame:
     def __init__(self, num_players: int = 2, ai_players: set = None):
         pygame.init()
-        pygame.display.set_caption("花砖物语 Azul")
+        pygame.display.set_caption("Azul")
 
-        # Retina 处理：先创建逻辑尺寸窗口，再检查实际尺寸
-        flags = pygame.SCALED | pygame.RESIZABLE
+        # 桌面端：SCALED+RESIZABLE；浏览器端 pygbag 自行管理画布
+        if sys.platform == "emscripten":
+            flags = 0
+        else:
+            flags = pygame.SCALED | pygame.RESIZABLE
         self.screen = pygame.display.set_mode((LW, LH), flags)
         self.clock  = pygame.time.Clock()
 
@@ -902,7 +901,7 @@ class AzulGame:
         # AI 设置：ai_players = {1} 表示玩家1由AI控制（0-indexed）
         self.ai_players  = ai_players or set()
         self.ai_queue    = queue.Queue()
-        self.ai_thread   = None
+        self.ai_task     = None   # asyncio.Task（替代线程）
 
         # 为每个 AI 玩家创建独立的 MCTSAgent（1000 ms 搜索预算）
         self.ai_agents: dict[int, MCTSAgent] = {
@@ -940,25 +939,26 @@ class AzulGame:
         }
 
     def _trigger_ai(self):
-        """如果当前玩家是AI，启动后台线程执行 MCTS 搜索"""
+        """如果当前玩家是AI，启动 asyncio 任务执行 MCTS 搜索"""
         cp = self.state.current_player
         if (cp in self.ai_players and
                 not self.state.game_over and
-                self.ai_thread is None):
+                self.ai_task is None):
             self.ui.ai_thinking = True
             agent      = self.ai_agents[cp]
             state_copy = self.state.clone()
-            self.ai_thread = threading.Thread(
-                target=agent.choose_move,
-                args=(state_copy, self.ai_queue),
-                daemon=True
-            )
-            self.ai_thread.start()
+            ai_q       = self.ai_queue
+
+            async def _run():
+                move = await agent.get_best_move_async(state_copy)
+                ai_q.put(move)
+
+            self.ai_task = asyncio.ensure_future(_run())
 
     def _poll_ai(self):
-        """检查AI是否已出招"""
-        if self.ai_thread and not self.ai_thread.is_alive():
-            self.ai_thread = None
+        """检查AI异步任务是否已完成"""
+        if self.ai_task is not None and self.ai_task.done():
+            self.ai_task = None
             try:
                 move = self.ai_queue.get_nowait()
                 if move:
@@ -1081,7 +1081,7 @@ class AzulGame:
         # 点击空白 → 取消选择
         self.ui.selected_source = None
 
-    def run(self):
+    async def run(self):
         self._trigger_ai()
         running = True
         prev_t  = time.time()
@@ -1103,7 +1103,7 @@ class AzulGame:
                         self.state = AzulState(
                             num_players=self.state.num_players)
                         self.ui.reset()
-                        self.ai_thread = None
+                        self.ai_task = None
                         self.ai_agents = {
                             pid: MCTSAgent(player_id=pid, timeout_ms=1000)
                             for pid in self.ai_players
@@ -1138,11 +1138,12 @@ class AzulGame:
             if self.ui.ai_thinking:
                 dots = "." * (int(time.time() * 2) % 4)
                 t = self.fonts['normal'].render(
-                    f"MCTS 思考中{dots}", True, C.YELLOW)
+                    f"AI thinking{dots}", True, C.YELLOW)
                 self.screen.blit(t, (LW // 2 - t.get_width() // 2, LH - 46))
 
             pygame.display.flip()
             self.clock.tick(60)
+            await asyncio.sleep(0)  # 让出控制权给 asyncio（浏览器帧循环）
 
         pygame.quit()
 
@@ -1163,4 +1164,4 @@ if __name__ == "__main__":
         num_players=args.players,
         ai_players=set(args.ai)
     )
-    game.run()
+    asyncio.run(game.run())
