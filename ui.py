@@ -912,7 +912,7 @@ class AzulGame:
 
     def _load_fonts(self) -> dict:
         """加载字体，优先使用系统中文字体"""
-        import pygame.font as pf
+        pf = pygame.font
         candidates = ["PingFang SC", "Heiti SC", "STHeiti",
                       "Hiragino Sans GB", "WenQuanYi Micro Hei",
                       "Microsoft YaHei", "SimHei"]
