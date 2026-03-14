@@ -11,6 +11,7 @@ import math
 import asyncio
 import queue
 import time
+import json
 import pygame
 
 # ── Retina/HiDPI 支持（桌面端，浏览器环境跳过）────────
@@ -248,6 +249,7 @@ class Renderer:
         self.fonts    = fonts
         self.hitmap   = HitMap()
         self.can_undo = False   # set by AzulGame before each render
+        self.record   = None    # Record instance, set by AzulGame before each render
 
     def render(self, state: AzulState, ui_state: 'UIState', anims: AnimManager):
         self.surf.fill(C.BG)
@@ -295,6 +297,11 @@ class Renderer:
         nt = self.fonts['small'].render("New", True, C.TEXT_MAIN)
         self.surf.blit(nt, (self.BTN_NEW.centerx - nt.get_width() // 2,
                             self.BTN_NEW.y + 8))
+
+        # 战绩
+        if self.record is not None:
+            rt = self.fonts['small'].render(self.record.label, True, C.TEXT_DIM)
+            self.surf.blit(rt, (270, 17))
 
         # 当前玩家
         cp = state.current_player
@@ -688,7 +695,7 @@ class Renderer:
         PW  = min(820, LW - 60)
         ROW_H = 84          # 每个玩家占的高度
         HDR_H = 80          # 标题区高度
-        FTR_H = 40          # 底部提示高度
+        FTR_H = 60          # 底部提示高度（含战绩行）
         PH  = HDR_H + n * ROW_H + 16 + FTR_H
         px  = LW // 2 - PW // 2
         py  = LH // 2 - PH // 2
@@ -756,10 +763,17 @@ class Renderer:
                     self.surf.blit(sep, (dx - 12, ry + 50))
 
         # ── 底部提示 ──────────────────────────────────────
+        # Show running record if available
+        if self.record is not None:
+            rec_t = self.fonts['bold'].render(
+                f"Record:  {self.record.label}", True, C.HIGHLIGHT)
+            self.surf.blit(rec_t, (LW // 2 - rec_t.get_width() // 2,
+                                   py + PH - FTR_H - 4))
+
         hint = self.fonts['small'].render(
             "R: Restart  /  Q: Quit", True, C.TEXT_DIM)
         self.surf.blit(hint, (LW // 2 - hint.get_width() // 2,
-                               py + PH - FTR_H + 10))
+                               py + PH - FTR_H + 22))
 
 
 # ──────────────────────────────────────────────────────────────
@@ -878,6 +892,68 @@ class UIState:
 
 
 # ──────────────────────────────────────────────────────────────
+# Win/Loss record — persists via localStorage (browser) or JSON file (desktop)
+# ──────────────────────────────────────────────────────────────
+class Record:
+    _KEY  = "azul_record"
+    _FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "record.json")
+
+    def __init__(self):
+        self.wins   = 0
+        self.losses = 0
+        self._load()
+
+    # ── persistence ───────────────────────────────────────────
+    def _load(self):
+        try:
+            if sys.platform == "emscripten":
+                from js import window          # type: ignore
+                raw = window.localStorage.getItem(self._KEY)
+                if raw:
+                    d = json.loads(str(raw))
+                    self.wins   = int(d.get("wins",   0))
+                    self.losses = int(d.get("losses", 0))
+            else:
+                if os.path.exists(self._FILE):
+                    with open(self._FILE) as f:
+                        d = json.load(f)
+                    self.wins   = int(d.get("wins",   0))
+                    self.losses = int(d.get("losses", 0))
+        except Exception:
+            pass
+
+    def _save(self):
+        try:
+            data = json.dumps({"wins": self.wins, "losses": self.losses})
+            if sys.platform == "emscripten":
+                from js import window          # type: ignore
+                window.localStorage.setItem(self._KEY, data)
+            else:
+                with open(self._FILE, "w") as f:
+                    f.write(data)
+        except Exception:
+            pass
+
+    # ── public API ────────────────────────────────────────────
+    def add_win(self):
+        self.wins += 1
+        self._save()
+
+    def add_loss(self):
+        self.losses += 1
+        self._save()
+
+    def reset(self):
+        self.wins = 0
+        self.losses = 0
+        self._save()
+
+    @property
+    def label(self) -> str:
+        return f"W {self.wins}  /  L {self.losses}"
+
+
+# ──────────────────────────────────────────────────────────────
 # AI — MCTS agent (drop-in replacement for the old RandomAI)
 # ──────────────────────────────────────────────────────────────
 # MCTSAgent is imported from ai.mcts_agent above.
@@ -921,6 +997,10 @@ class AzulGame:
 
         # Undo
         self.prev_state: AzulState | None = None
+
+        # Win/loss record
+        self.record        = Record()
+        self._record_saved = False
 
         # AI 设置：ai_players = {1} 表示玩家1由AI控制（0-indexed）
         self.ai_players  = ai_players or set()
@@ -1005,7 +1085,8 @@ class AzulGame:
             self.ai_task.cancel()
             self.ai_task = None
         self.state = AzulState(num_players=self.state.num_players)
-        self.prev_state = None
+        self.prev_state    = None
+        self._record_saved = False
         self.ui.reset()
         self.ai_agents = {
             pid: MCTSAgent(player_id=pid, timeout_ms=1000)
@@ -1193,8 +1274,20 @@ class AzulGame:
             # 更新动画
             self.anims.update(dt)
 
+            # 游戏结束时更新战绩（每局只记录一次）
+            if self.state.game_over and not self._record_saved:
+                human_players = set(range(self.state.num_players)) - self.ai_players
+                if human_players:
+                    winner = self.state.winner()
+                    if winner not in self.ai_players:
+                        self.record.add_win()
+                    else:
+                        self.record.add_loss()
+                self._record_saved = True
+
             # 渲染
             self.renderer.can_undo = self.prev_state is not None
+            self.renderer.record   = self.record
             self.renderer.render(self.state, self.ui, self.anims)
 
             # AI 思考中提示
