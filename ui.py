@@ -239,10 +239,15 @@ class HitMap:
 # 主渲染器
 # ──────────────────────────────────────────────────────────────
 class Renderer:
+    # On-screen buttons (in info bar) — readable by AzulGame for click detection
+    BTN_UNDO = pygame.Rect(120, 10, 68, 32)
+    BTN_NEW  = pygame.Rect(198, 10, 58, 32)
+
     def __init__(self, surf: pygame.Surface, fonts: dict):
-        self.surf  = surf
-        self.fonts = fonts
-        self.hitmap = HitMap()
+        self.surf     = surf
+        self.fonts    = fonts
+        self.hitmap   = HitMap()
+        self.can_undo = False   # set by AzulGame before each render
 
     def render(self, state: AzulState, ui_state: 'UIState', anims: AnimManager):
         self.surf.fill(C.BG)
@@ -274,6 +279,22 @@ class Renderer:
         # 标题
         title = self.fonts['title'].render("Azul", True, C.TEXT_MAIN)
         self.surf.blit(title, (16, 10))
+
+        # [Undo] button
+        undo_border = C.HIGHLIGHT if self.can_undo else C.BORDER
+        undo_text_c = C.TEXT_MAIN if self.can_undo else C.TEXT_DIM
+        rounded_rect(self.surf, C.PANEL, self.BTN_UNDO, radius=6,
+                     border=1, border_color=undo_border)
+        ut = self.fonts['small'].render("Undo", True, undo_text_c)
+        self.surf.blit(ut, (self.BTN_UNDO.centerx - ut.get_width() // 2,
+                            self.BTN_UNDO.y + 8))
+
+        # [New] button
+        rounded_rect(self.surf, C.PANEL, self.BTN_NEW, radius=6,
+                     border=1, border_color=C.BORDER)
+        nt = self.fonts['small'].render("New", True, C.TEXT_MAIN)
+        self.surf.blit(nt, (self.BTN_NEW.centerx - nt.get_width() // 2,
+                            self.BTN_NEW.y + 8))
 
         # 当前玩家
         cp = state.current_player
@@ -898,6 +919,9 @@ class AzulGame:
         self.anims     = AnimManager()
         self.renderer  = Renderer(self.screen, self.fonts)
 
+        # Undo
+        self.prev_state: AzulState | None = None
+
         # AI 设置：ai_players = {1} 表示玩家1由AI控制（0-indexed）
         self.ai_players  = ai_players or set()
         self.ai_queue    = queue.Queue()
@@ -975,6 +999,40 @@ class AzulGame:
             except queue.Empty:
                 pass
 
+    def _new_game(self):
+        """重新开始一局"""
+        if self.ai_task is not None:
+            self.ai_task.cancel()
+            self.ai_task = None
+        self.state = AzulState(num_players=self.state.num_players)
+        self.prev_state = None
+        self.ui.reset()
+        self.ai_agents = {
+            pid: MCTSAgent(player_id=pid, timeout_ms=1000)
+            for pid in self.ai_players
+        }
+        self._trigger_ai()
+
+    def _undo(self):
+        """撤回上一步人类操作，恢复到移动前的状态"""
+        if self.prev_state is None:
+            return
+        # 取消正在进行的 AI 任务
+        if self.ai_task is not None:
+            self.ai_task.cancel()
+            self.ai_task = None
+        # 清空 AI 队列
+        while not self.ai_queue.empty():
+            try:
+                self.ai_queue.get_nowait()
+            except queue.Empty:
+                break
+        self.state = self.prev_state
+        self.prev_state = None
+        self.ui.reset()
+        self.ui.ai_thinking = False
+        self._trigger_ai()
+
     def _start_scoring_phase(self):
         """在贴砖前启动得分动画"""
         steps = self.state.preview_tiling()
@@ -1022,6 +1080,15 @@ class AzulGame:
             self._trigger_ai()
 
     def _handle_click(self, pos):
+        # [Undo] and [New] buttons always active (except during scoring anim)
+        if not self.ui.is_scoring:
+            if Renderer.BTN_UNDO.collidepoint(pos):
+                self._undo()
+                return
+            if Renderer.BTN_NEW.collidepoint(pos):
+                self._new_game()
+                return
+
         if self.state.game_over or self.ui.ai_thinking or self.anims.busy:
             return
         # 得分动画期间按空格跳过
@@ -1057,6 +1124,7 @@ class AzulGame:
                 legal = self.state.get_legal_moves()
                 move  = Move(source=src, color=col, target_row=row)
                 if move in legal:
+                    self.prev_state = self.state.clone()
                     # 应用移动（不自动执行贴砖），再判断是否进入贴砖阶段
                     self.state.apply_move_inplace_no_tiling(move)
                     self.ui.reset()
@@ -1100,15 +1168,9 @@ class AzulGame:
                     if event.key == pygame.K_q:
                         running = False
                     elif event.key == pygame.K_r:
-                        self.state = AzulState(
-                            num_players=self.state.num_players)
-                        self.ui.reset()
-                        self.ai_task = None
-                        self.ai_agents = {
-                            pid: MCTSAgent(player_id=pid, timeout_ms=1000)
-                            for pid in self.ai_players
-                        }
-                        self._trigger_ai()
+                        self._new_game()
+                    elif event.key == pygame.K_z:
+                        self._undo()
                     elif event.key == pygame.K_ESCAPE:
                         self.ui.selected_source = None
                     elif event.key == pygame.K_SPACE:
@@ -1132,6 +1194,7 @@ class AzulGame:
             self.anims.update(dt)
 
             # 渲染
+            self.renderer.can_undo = self.prev_state is not None
             self.renderer.render(self.state, self.ui, self.anims)
 
             # AI 思考中提示

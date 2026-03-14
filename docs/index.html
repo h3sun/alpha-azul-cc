@@ -181,8 +181,8 @@ function show_infobox() {
     <title>alpha-azul-cc</title>
     <meta charset="UTF-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="viewport" content="height=device-height, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="height=device-height, initial-scale=1.0, user-scalable=no">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes"/>
 
@@ -273,6 +273,29 @@ function show_infobox() {
            right: 10px;
            border: 1px solid black;
         }
+
+        /* Portrait-mode overlay — asks user to rotate */
+        #rotate-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: #1c1c28;
+            color: #ebebf5;
+            font-family: arial;
+            font-size: 22px;
+            font-weight: bold;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 999999;
+            text-align: center;
+            gap: 20px;
+        }
+        #rotate-overlay .icon { font-size: 64px; }
+
+        @media (orientation: portrait) {
+            #rotate-overlay { display: flex; }
+        }
     </style>
 
     <script>
@@ -289,6 +312,12 @@ function show_infobox() {
 </head>
 
 <body>
+
+    <!-- Portrait-mode rotation prompt (hidden in landscape) -->
+    <div id="rotate-overlay">
+        <div class="icon">&#8635;</div>
+        <div>Please rotate your device to landscape</div>
+    </div>
 
     <div id="transfer" align=center>
 <!--        <div class="spinner" id='spinner'></div> -->
